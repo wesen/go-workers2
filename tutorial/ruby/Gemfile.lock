@@ -1,20 +1,35 @@
 GEM
   remote: https://rubygems.org/
   specs:
+    base64 (0.2.0)
     connection_pool (2.4.1)
+    mustermann (3.0.3)
+      ruby2_keywords (~> 0.0.1)
     rack (2.2.10)
+    rack-protection (3.2.0)
+      base64 (>= 0.1.0)
+      rack (~> 2.2, >= 2.2.4)
     redis (4.8.1)
+    ruby2_keywords (0.0.5)
     sidekiq (6.5.12)
       connection_pool (>= 2.2.5, < 3)
       rack (~> 2.0)
       redis (>= 4.5.0, < 5)
+    sinatra (3.2.0)
+      mustermann (~> 3.0)
+      rack (~> 2.2, >= 2.2.4)
+      rack-protection (= 3.2.0)
+      tilt (~> 2.0)
+    tilt (2.5.0)
 
 PLATFORMS
   x86_64-linux
 
 DEPENDENCIES
+  rack
   redis (~> 4.8)
   sidekiq (~> 6.5)
+  sinatra
 
 BUNDLED WITH
    2.4.22
