@@ -40,6 +40,8 @@ type simpleFetcher struct {
 	logger   *log.Logger
 }
 
+var _ Fetcher = &simpleFetcher{}
+
 func newSimpleFetcher(queue string, opts Options, isActive bool) *simpleFetcher {
 	logger := opts.Logger
 	if logger == nil {
