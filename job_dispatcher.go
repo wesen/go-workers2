@@ -2,7 +2,6 @@ package workers
 
 import (
 	"fmt"
-	"log"
 	"reflect"
 
 	"github.com/bitly/go-simplejson"
@@ -112,31 +111,25 @@ func DecodeSidekiqArgs(args *simplejson.Json, target interface{}) error {
 
 // Dispatch routes a message to its registered handler
 func (d *JobDispatcher) Dispatch(msg *Msg) error {
-	log.Printf("Dispatching message: %v", msg)
 	class := msg.Class()
 	handlerInfo, ok := d.handlers[class]
 	if !ok {
-		log.Printf("No handler registered for job class: %s", class)
 		return fmt.Errorf("no handler registered for job class: %s", class)
 	}
-	log.Printf("Handler found for class: %s", class)
 
 	args := msg.Args()
 	if args == nil {
 		return fmt.Errorf("no arguments received for job class: %s", class)
 	}
-	log.Printf("Arguments received for class: %s", class)
 
 	// Create a new instance of the args struct
 	argsValue := reflect.New(handlerInfo.argsType.Elem())
 	argsInterface := argsValue.Interface()
 	// Decode the arguments
 	if err := DecodeSidekiqArgs(args.Json, argsInterface); err != nil {
-		log.Printf("Failed to decode job args for class %s: %v", class, err)
 		return fmt.Errorf("failed to decode job args for class %s: %v", class, err)
 	}
 
 	// Call the handler
-	log.Printf("Calling handler for class: %s", class)
 	return handlerInfo.handler.HandleJob(argsInterface)
 }
