@@ -5,41 +5,97 @@ import (
 	"fmt"
 	"log"
 	"os/signal"
+	"reflect"
 	"syscall"
 	"time"
 
+	"github.com/bitly/go-simplejson"
 	workers "github.com/digitalocean/go-workers2"
 	"golang.org/x/sync/errgroup"
 )
 
-// RubyJobArgs represents the structure of arguments received from Ruby
+// DecodeSidekiqArgs decodes a SimpleJSON array into a struct's public fields in order
+func DecodeSidekiqArgs(args *simplejson.Json, target interface{}) error {
+	v := reflect.ValueOf(target)
+	if v.Kind() != reflect.Ptr || v.IsNil() {
+		return fmt.Errorf("target must be a non-nil pointer to a struct")
+	}
+
+	v = v.Elem()
+	if v.Kind() != reflect.Struct {
+		return fmt.Errorf("target must be a pointer to a struct")
+	}
+
+	t := v.Type()
+	currentIdx := 0
+
+	for i := 0; i < t.NumField(); i++ {
+		field := t.Field(i)
+		// Skip unexported fields
+		if !field.IsExported() {
+			continue
+		}
+
+		// Get the value at the current index
+		jsonVal := args.GetIndex(currentIdx)
+		fieldValue := v.Field(i)
+
+		// Handle different field types
+		switch fieldValue.Kind() {
+		case reflect.String:
+			str, err := jsonVal.String()
+			if err != nil {
+				return fmt.Errorf("failed to decode string for field %s: %v", field.Name, err)
+			}
+			fieldValue.SetString(str)
+		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+			num, err := jsonVal.Int64()
+			if err != nil {
+				return fmt.Errorf("failed to decode int for field %s: %v", field.Name, err)
+			}
+			fieldValue.SetInt(num)
+		case reflect.Float32, reflect.Float64:
+			num, err := jsonVal.Float64()
+			if err != nil {
+				return fmt.Errorf("failed to decode float for field %s: %v", field.Name, err)
+			}
+			fieldValue.SetFloat(num)
+		case reflect.Bool:
+			b, err := jsonVal.Bool()
+			if err != nil {
+				return fmt.Errorf("failed to decode bool for field %s: %v", field.Name, err)
+			}
+			fieldValue.SetBool(b)
+		default:
+			return fmt.Errorf("unsupported type %v for field %s", fieldValue.Kind(), field.Name)
+		}
+
+		currentIdx++
+	}
+
+	return nil
+}
+
+// Simplified RubyJobArgs without tags
 type RubyJobArgs struct {
-	Name    string `json:"name"`
-	Message string `json:"message"`
+	Name    string
+	Message string
 }
 
 // processRubyJob handles jobs coming from Ruby
 func processRubyJob(msg *workers.Msg) error {
-	// Ruby sends arguments as an array of values
 	args := msg.Args()
 	if args == nil {
 		return fmt.Errorf("no arguments received")
 	}
 
-	// Extract arguments from the array
-	name, err := args.GetIndex(0).String()
-	if err != nil {
-		return fmt.Errorf("failed to get name: %v", err)
+	var jobArgs RubyJobArgs
+	if err := DecodeSidekiqArgs(args.Json, &jobArgs); err != nil {
+		return fmt.Errorf("failed to decode job args: %v", err)
 	}
 
-	message, err := args.GetIndex(1).String()
-	if err != nil {
-		return fmt.Errorf("failed to get message: %v", err)
-	}
-
-	// Process the job
 	log.Printf("Received message from Ruby: %s says %s\n",
-		name, message)
+		jobArgs.Name, jobArgs.Message)
 	return nil
 }
 
@@ -109,9 +165,6 @@ func main() {
 	// Register the worker to process jobs from the "ruby_jobs" queue
 	manager.AddWorker("ruby_jobs", 10, processRubyJob, middlewares...)
 
-	// Create a producer for sending jobs to Ruby
-	producer := manager.Producer()
-
 	// Start the stats server
 	g.Go(func() error {
 		log.Printf("Starting stats server at http://localhost:8080/stats")
@@ -123,13 +176,15 @@ func main() {
 	})
 
 	// Start the job sender
-	g.Go(func() error {
-		// Give Redis and the manager a moment to connect
-		time.Sleep(500 * time.Millisecond)
-		err := runJobSender(ctx, producer)
-		log.Println("Job sender stopped")
-		return err
-	})
+	// g.Go(func() error {
+	// Create a producer for sending jobs to Ruby
+	// producer := manager.Producer()
+	// 	// Give Redis and the manager a moment to connect
+	// 	time.Sleep(500 * time.Millisecond)
+	// 	err := runJobSender(ctx, producer)
+	// 	log.Println("Job sender stopped")
+	// 	return err
+	// })
 
 	// Start the manager in a goroutine
 	g.Go(func() error {
