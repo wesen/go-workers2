@@ -11,7 +11,7 @@ import (
 	"github.com/digitalocean/go-workers2/storage"
 )
 
-//Fetcher is an interface for managing work messages
+// Fetcher is an interface for managing work messages
 type Fetcher interface {
 	Queue() string
 	InProgressQueue() string
@@ -39,6 +39,8 @@ type simpleFetcher struct {
 	closed   chan bool
 	logger   *log.Logger
 }
+
+var _ Fetcher = &simpleFetcher{}
 
 func newSimpleFetcher(queue string, opts Options, isActive bool) *simpleFetcher {
 	logger := opts.Logger

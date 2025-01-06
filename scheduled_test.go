@@ -29,7 +29,7 @@ func TestScheduled(t *testing.T) {
 	rc.ZAdd(ctx, retryQueue(opts.Namespace), &redis.Z{Score: now - 10.0, Member: message2.ToJson()}).Result()
 	rc.ZAdd(ctx, retryQueue(opts.Namespace), &redis.Z{Score: now + 60.0, Member: message3.ToJson()}).Result()
 
-	scheduled.poll()
+	scheduled.poll(ctx)
 
 	defaultCount, _ := rc.LLen(ctx, "prod:queue:default").Result()
 	myqueueCount, _ := rc.LLen(ctx, "prod:queue:myqueue").Result()
