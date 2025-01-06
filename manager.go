@@ -192,9 +192,9 @@ func (m *Manager) Run(ctx context.Context) error {
 		return nil
 	})
 
-	m.schedule = newScheduledWorker(m.opts, ctx)
+	m.schedule = newScheduledWorker(m.opts)
 	g.Go(func() error {
-		m.schedule.run()
+		m.schedule.run(ctx)
 		return nil
 	})
 
