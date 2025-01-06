@@ -85,10 +85,11 @@ func TestManager_AddBeforeStartHooks(t *testing.T) {
 		beforeStartCalled++
 	})
 	ch := make(chan bool)
+	ctx := context.Background()
 	go func() {
-		mgr.Run()
+		mgr.Run(ctx)
 		ch <- true
-		mgr.Run()
+		mgr.Run(ctx)
 		ch <- true
 	}()
 	time.Sleep(time.Second)
@@ -112,10 +113,11 @@ func TestManager_AddDuringDrainHooks(t *testing.T) {
 		duringDrainCalled++
 	})
 	ch := make(chan bool)
+	ctx := context.Background()
 	go func() {
-		mgr.Run()
+		mgr.Run(ctx)
 		ch <- true
-		mgr.Run()
+		mgr.Run(ctx)
 		ch <- true
 	}()
 	time.Sleep(time.Second)
@@ -199,10 +201,11 @@ func TestManager_Run(t *testing.T) {
 	mgr.AddWorker("queue1", 1, q1cc.F, NopMiddleware)
 	mgr.AddWorker("queue2", 2, q2cc.F, NopMiddleware)
 
+	ctx := context.Background()
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {
-		mgr.Run()
+		mgr.Run(ctx)
 		wg.Done()
 	}()
 
@@ -232,7 +235,7 @@ func TestManager_Run(t *testing.T) {
 	// Test that we can restart the manager
 	wg.Add(1)
 	go func() {
-		mgr.Run()
+		mgr.Run(ctx)
 		wg.Done()
 	}()
 
@@ -266,10 +269,12 @@ func TestManager_inProgressMessages(t *testing.T) {
 	mgr.AddWorker("ipm_test_queue1", 1, q1cc.F, NopMiddleware)
 	mgr.AddWorker("ipm_test_queue2", 2, q2cc.F, NopMiddleware)
 
+	ctx := context.Background()
+
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {
-		mgr.Run()
+		mgr.Run(ctx)
 		wg.Done()
 	}()
 
@@ -349,10 +354,12 @@ func TestManager_InactiveManagerNoMessageProcessing(t *testing.T) {
 	q1cc := NewCallCounter()
 	mgr.AddWorker("queue1", 1, q1cc.F, NopMiddleware)
 
+	ctx := context.Background()
+
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {
-		mgr.Run()
+		mgr.Run(ctx)
 		wg.Done()
 	}()
 	prod, err := NewProducer(opts)
@@ -397,10 +404,12 @@ func TestManager_Run_HeartbeatHandlesStaleInProgressMessages(t *testing.T) {
 		return nil
 	})
 
+	ctx := context.Background()
 	var wg1 sync.WaitGroup
+
 	wg1.Add(1)
 	go func() {
-		mgr1.Run()
+		mgr1.Run(ctx)
 		wg1.Done()
 	}()
 
@@ -464,10 +473,11 @@ func TestManager_Run_HeartbeatHandlesStaleInProgressMessages(t *testing.T) {
 		}
 		return nil
 	})
+
 	var wg2 sync.WaitGroup
 	wg2.Add(1)
 	go func() {
-		mgr2.Run()
+		mgr2.Run(ctx)
 		wg2.Done()
 	}()
 	// process requeued message in manager2
@@ -528,9 +538,10 @@ func TestManager_Run_PrioritizedActiveManager(t *testing.T) {
 			return nil
 		})
 
+		ctx := context.Background()
 		managerConfig.waitGroup.Add(1)
 		go func() {
-			managerConfig.manager.Run()
+			managerConfig.manager.Run(ctx)
 			managerConfig.waitGroup.Done()
 		}()
 		managerConfigs = append(managerConfigs, managerConfig)

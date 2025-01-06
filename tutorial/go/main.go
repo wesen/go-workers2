@@ -4,9 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"os"
 	"os/signal"
-	"sync"
 	"syscall"
 	"time"
 
@@ -87,16 +85,12 @@ func runJobSender(ctx context.Context, producer *workers.Producer) error {
 }
 
 func main() {
-	// Create a context that will be canceled on interrupt
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	// Create a context that will be canceled on SIGINT/SIGTERM
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
 
 	// Create an error group with the context
 	g, ctx := errgroup.WithContext(ctx)
-
-	// Setup signal handling
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
 	// Create a manager for the workers
 	manager, err := workers.NewManager(workers.Options{
@@ -118,31 +112,13 @@ func main() {
 	// Create a producer for sending jobs to Ruby
 	producer := manager.Producer()
 
-	// Create a sync.Once for stopping the manager
-	var stopOnce sync.Once
-
-	// Handle shutdown signal
-	g.Go(func() error {
-		select {
-		case <-sigChan:
-			log.Println("Received shutdown signal")
-			cancel() // This will trigger all other goroutines to stop
-			stopOnce.Do(func() {
-				log.Println("Stopping manager...")
-				manager.Stop()
-			})
-			return nil
-		case <-ctx.Done():
-			return ctx.Err()
-		}
-	})
-
 	// Start the stats server
 	g.Go(func() error {
 		log.Printf("Starting stats server at http://localhost:8080/stats")
 		go workers.StartAPIServer(8080)
 		<-ctx.Done()
 		workers.StopAPIServer()
+		log.Println("Stats server stopped")
 		return nil
 	})
 
@@ -150,19 +126,15 @@ func main() {
 	g.Go(func() error {
 		// Give Redis and the manager a moment to connect
 		time.Sleep(500 * time.Millisecond)
-		return runJobSender(ctx, producer)
+		err := runJobSender(ctx, producer)
+		log.Println("Job sender stopped")
+		return err
 	})
 
 	// Start the manager in a goroutine
 	g.Go(func() error {
-		go func() {
-			<-ctx.Done()
-			stopOnce.Do(func() {
-				log.Println("Stopping manager...")
-				manager.Stop()
-			})
-		}()
-		manager.Run()
+		manager.Run(ctx)
+		log.Println("Manager exited")
 		return nil
 	})
 

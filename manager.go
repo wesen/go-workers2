@@ -2,6 +2,7 @@ package workers
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"os"
 	"sort"
@@ -11,6 +12,7 @@ import (
 	"github.com/digitalocean/go-workers2/storage"
 	"github.com/go-redis/redis/v8"
 	"github.com/google/uuid"
+	"golang.org/x/sync/errgroup"
 )
 
 // Manager coordinates work, workers, and signaling needed for job processing
@@ -22,7 +24,6 @@ type Manager struct {
 	lock             sync.Mutex
 	signal           chan os.Signal
 	running          bool
-	stop             chan bool
 	active           bool
 	logger           *log.Logger
 	startedAt        time.Time
@@ -147,60 +148,64 @@ func (m *Manager) AddRetriesExhaustedHandlers(handlers ...RetriesExhaustedFunc) 
 	m.retriesExhaustedHandlers = append(m.retriesExhaustedHandlers, handlers...)
 }
 
-// Run starts all workers under this Manager and blocks until they exit.
-func (m *Manager) Run() {
+// Run starts all workers under this Manager and blocks until they exit or context is cancelled.
+func (m *Manager) Run(ctx context.Context) error {
 	m.startedAt = time.Now()
 
 	m.lock.Lock()
-	defer m.lock.Unlock()
 	if m.running {
-		return // Can't start if we're already running!
+		m.lock.Unlock()
+		return fmt.Errorf("manager already running")
 	}
 	m.running = true
+	m.lock.Unlock()
+
+	defer func() {
+		log.Println("Stopping manager")
+		m.Stop()
+		log.Println("Manager stopped")
+	}()
 
 	for _, h := range m.beforeStartHooks {
 		h()
 	}
 
 	globalAPIServer.registerManager(m)
+	defer globalAPIServer.deregisterManager(m)
 
-	var wg sync.WaitGroup
+	g, ctx := errgroup.WithContext(ctx)
 
-	wg.Add(1)
-	m.signal = make(chan os.Signal, 1)
-	go func() {
-		m.handleSignals()
-		wg.Done()
-	}()
-
-	wg.Add(len(m.workers))
 	for i := range m.workers {
 		w := m.workers[i]
-		go func() {
+		g.Go(func() error {
 			fetcher := newSimpleFetcher(w.queue, *m.Opts(), m.IsActive())
 			w.start(fetcher)
-			wg.Done()
-		}()
+			return nil
+		})
 	}
-	m.schedule = newScheduledWorker(m.opts)
 
-	wg.Add(1)
-	go func() {
+	g.Go(func() error {
+		<-ctx.Done()
+		for _, w := range m.workers {
+			w.quit()
+		}
+		return nil
+	})
+
+	m.schedule = newScheduledWorker(m.opts, ctx)
+	g.Go(func() error {
 		m.schedule.run()
-		wg.Done()
-	}()
+		return nil
+	})
 
 	if m.opts.Heartbeat != nil {
-		go m.startHeartbeat()
+		g.Go(func() error {
+			m.startHeartbeat(ctx)
+			return nil
+		})
 	}
 
-	// Release the lock so that Stop can acquire it
-	m.lock.Unlock()
-	wg.Wait()
-	// Regain the lock
-	m.lock.Lock()
-	globalAPIServer.deregisterManager(m)
-	m.running = false
+	return g.Wait()
 }
 
 // Stop all workers under this Manager and returns immediately.
@@ -210,17 +215,16 @@ func (m *Manager) Stop() {
 	if !m.running {
 		return
 	}
-	if m.opts.Heartbeat != nil {
-		m.stopHeartbeat()
-	}
+
 	for _, w := range m.workers {
 		w.quit()
 	}
-	m.schedule.quit()
+
 	for _, h := range m.duringDrainHooks {
 		h()
 	}
-	m.stopSignalHandler()
+
+	m.running = false
 }
 
 func (m *Manager) Opts() *Options {
@@ -309,38 +313,38 @@ func (m *Manager) GetRetries(page uint64, pageSize int64, match string) (Retries
 	}, nil
 }
 
-func (m *Manager) startHeartbeat() error {
-	heartbeatTicker := time.NewTicker(m.opts.Heartbeat.Interval)
-	m.heartbeatChannel = make(chan bool, 1)
+func (m *Manager) startHeartbeat(ctx context.Context) {
+	ticker := time.NewTicker(m.opts.Heartbeat.Interval)
+	defer ticker.Stop()
 
 	for {
 		select {
-		case <-heartbeatTicker.C:
-			heartbeatTime, err := m.opts.store.GetTime(context.Background())
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			heartbeatTime, err := m.opts.store.GetTime(ctx)
 			if err != nil {
 				m.logger.Println("ERR: Failed to get heartbeat time", err)
-				return err
+				return
 			}
 			heartbeat, err := m.sendHeartbeat(heartbeatTime)
 			if err != nil {
 				m.logger.Println("ERR: Failed to send heartbeat", err)
-				return err
+				return
 			}
 			expireTS := heartbeatTime.Add(-m.opts.Heartbeat.HeartbeatTTL).Unix()
-			staleMessageUpdates, err := m.handleAllExpiredHeartbeats(context.Background(), expireTS)
+			staleMessageUpdates, err := m.handleAllExpiredHeartbeats(ctx, expireTS)
 			if err != nil {
 				m.logger.Println("ERR: error expiring heartbeat identities", err)
-				return err
+				return
 			}
 			for _, afterHeartbeatHook := range m.afterHeartbeatHooks {
 				err := afterHeartbeatHook(heartbeat, m, staleMessageUpdates)
 				if err != nil {
 					m.logger.Println("ERR: Failed to execute after heartbeat hook", err)
-					return err
+					return
 				}
 			}
-		case <-m.heartbeatChannel:
-			return nil
 		}
 	}
 }

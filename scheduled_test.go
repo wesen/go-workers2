@@ -15,7 +15,7 @@ func TestScheduled(t *testing.T) {
 	opts, err := SetupDefaultTestOptionsWithNamespace("prod")
 	assert.NoError(t, err)
 
-	scheduled := newScheduledWorker(opts)
+	scheduled := newScheduledWorker(opts, ctx)
 
 	rc := opts.client
 

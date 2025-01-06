@@ -8,32 +8,28 @@ import (
 
 type scheduledWorker struct {
 	opts Options
-	done chan bool
+	ctx  context.Context
 }
 
 func (s *scheduledWorker) run() {
+	ticker := time.NewTicker(s.opts.PollInterval)
+	defer ticker.Stop()
+
 	for {
 		select {
-		case <-s.done:
+		case <-s.ctx.Done():
 			return
-		default:
+		case <-ticker.C:
+			s.poll()
 		}
-
-		s.poll()
-
-		time.Sleep(s.opts.PollInterval)
 	}
-}
-
-func (s *scheduledWorker) quit() {
-	close(s.done)
 }
 
 func (s *scheduledWorker) poll() {
 	now := nowToSecondsWithNanoPrecision()
 
 	for {
-		rawMessage, err := s.opts.store.DequeueScheduledMessage(context.Background(), now)
+		rawMessage, err := s.opts.store.DequeueScheduledMessage(s.ctx, now)
 
 		if err != nil {
 			break
@@ -44,11 +40,11 @@ func (s *scheduledWorker) poll() {
 		queue = strings.TrimPrefix(queue, s.opts.Namespace)
 		message.Set("enqueued_at", nowToSecondsWithNanoPrecision())
 
-		s.opts.store.EnqueueMessageNow(context.Background(), queue, message.ToJson())
+		s.opts.store.EnqueueMessageNow(s.ctx, queue, message.ToJson())
 	}
 
 	for {
-		rawMessage, err := s.opts.store.DequeueRetriedMessage(context.Background(), now)
+		rawMessage, err := s.opts.store.DequeueRetriedMessage(s.ctx, now)
 
 		if err != nil {
 			break
@@ -59,13 +55,13 @@ func (s *scheduledWorker) poll() {
 		queue = strings.TrimPrefix(queue, s.opts.Namespace)
 		message.Set("enqueued_at", nowToSecondsWithNanoPrecision())
 
-		s.opts.store.EnqueueMessageNow(context.Background(), queue, message.ToJson())
+		s.opts.store.EnqueueMessageNow(s.ctx, queue, message.ToJson())
 	}
 }
 
-func newScheduledWorker(opts Options) *scheduledWorker {
+func newScheduledWorker(opts Options, ctx context.Context) *scheduledWorker {
 	return &scheduledWorker{
 		opts: opts,
-		done: make(chan bool),
+		ctx:  ctx,
 	}
 }
