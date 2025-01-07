@@ -56,8 +56,71 @@ func TestDecodeSidekiqArgs(t *testing.T) {
 		Int    int
 	}
 
+	type ComplexSliceTypes struct {
+		NestedStrings [][]string
+		SlicePointers []*string
+		StructSlices  []BasicTypes
+		MixedSlice    []interface{}
+	}
+
+	type ComplexMapTypes struct {
+		NestedMap   map[string]map[string]string
+		MapPointers map[string]*BasicTypes
+		SliceMap    map[string][]string
+	}
+
+	type TaggedStruct struct {
+		Struct struct {
+			RenamedField string `json:"renamed"`
+			IgnoredField string `json:"-"`
+			EmptyOmitted string `json:"omitted,omitempty"`
+		}
+	}
+
+	type NullableTypes struct {
+		NullString    *string
+		NullStruct    *BasicTypes
+		NullSlice     []string
+		NullMap       map[string]string
+		NullInterface interface{}
+	}
+
+	// Helper function to compare string pointer slices
+	compareStringPointerSlices := func(t *testing.T, expected, actual []*string) {
+		assert.Equal(t, len(expected), len(actual), "slice lengths should match")
+		for i := range expected {
+			if expected[i] == nil {
+				assert.Nil(t, actual[i], "element %d should be nil", i)
+			} else {
+				assert.NotNil(t, actual[i], "element %d should not be nil", i)
+				assert.Equal(t, *expected[i], *actual[i], "element %d values should match", i)
+			}
+		}
+	}
+
+	// Helper function to compare maps with BasicTypes pointers
+	compareBasicTypesPointerMap := func(t *testing.T, expected, actual map[string]*BasicTypes) {
+		assert.Equal(t, len(expected), len(actual), "map lengths should match")
+		for k, expectedVal := range expected {
+			actualVal, ok := actual[k]
+			if !ok {
+				t.Errorf("key %q missing from actual map", k)
+				continue
+			}
+			if expectedVal == nil {
+				assert.Nil(t, actualVal, "value for key %q should be nil", k)
+			} else {
+				assert.NotNil(t, actualVal, "value for key %q should not be nil", k)
+				assert.Equal(t, *expectedVal, *actualVal, "values for key %q should match", k)
+			}
+		}
+	}
+
 	str := "test"
 	num := 42
+	testStr1 := "test"
+	testStr2 := "test2"
+	value := "value"
 
 	tests := []struct {
 		name        string
@@ -65,6 +128,7 @@ func TestDecodeSidekiqArgs(t *testing.T) {
 		target      interface{}
 		expected    interface{}
 		expectError bool
+		compare     func(t *testing.T, expected, actual interface{}) // optional custom comparison
 	}{
 		{
 			name:    "basic types all fields",
@@ -178,8 +242,8 @@ func TestDecodeSidekiqArgs(t *testing.T) {
 		{
 			name:    "partial struct with unexported field",
 			jsonStr: `["hello", 42]`,
-			target:  &PartialStruct{},
-			expected: &PartialStruct{
+			target:  &BasicTypes{},
+			expected: &BasicTypes{
 				String: "hello",
 				Int:    42,
 			},
@@ -252,6 +316,148 @@ func TestDecodeSidekiqArgs(t *testing.T) {
 			}{},
 			expectError: true,
 		},
+		{
+			name:    "complex slices",
+			jsonStr: `[[["a", "b"], ["c", "d"]], ["test", "test2"], [{"String": "s1", "Int": 1}, {"String": "s2", "Int": 2}], ["string", 42, true]]`,
+			target:  &ComplexSliceTypes{},
+			expected: &ComplexSliceTypes{
+				NestedStrings: [][]string{{"a", "b"}, {"c", "d"}},
+				SlicePointers: []*string{&testStr1, &testStr2},
+				StructSlices: []BasicTypes{
+					{String: "s1", Int: 1},
+					{String: "s2", Int: 2},
+				},
+				MixedSlice: []interface{}{"string", float64(42), true},
+			},
+			compare: func(t *testing.T, expected, actual interface{}) {
+				e := expected.(*ComplexSliceTypes)
+				a := actual.(*ComplexSliceTypes)
+
+				// Compare non-pointer fields normally
+				assert.Equal(t, e.NestedStrings, a.NestedStrings)
+				assert.Equal(t, e.StructSlices, a.StructSlices)
+				assert.Equal(t, e.MixedSlice, a.MixedSlice)
+
+				// Compare pointer slice specially
+				compareStringPointerSlices(t, e.SlicePointers, a.SlicePointers)
+			},
+		},
+		{
+			name:    "complex maps",
+			jsonStr: `[{"key1": {"inner": "value"}}, {"key": {"String": "test"}}, {"key": ["a", "b"]}]`,
+			target:  &ComplexMapTypes{},
+			expected: &ComplexMapTypes{
+				NestedMap: map[string]map[string]string{
+					"key1": map[string]string{
+						"inner": "value",
+					},
+				},
+				MapPointers: map[string]*BasicTypes{
+					"key": {String: "test"},
+				},
+				SliceMap: map[string][]string{
+					"key": []string{"a", "b"},
+				},
+			},
+			compare: func(t *testing.T, expected, actual interface{}) {
+				e := expected.(*ComplexMapTypes)
+				a := actual.(*ComplexMapTypes)
+
+				// Compare nested maps
+				assert.Equal(t, len(e.NestedMap), len(a.NestedMap), "NestedMap lengths should match")
+				for k1, expectedInner := range e.NestedMap {
+					actualInner, ok := a.NestedMap[k1]
+					if !ok {
+						t.Errorf("key %q missing from NestedMap", k1)
+						continue
+					}
+					assert.Equal(t, expectedInner, actualInner, "inner maps for key %q should match", k1)
+				}
+
+				// Compare pointer maps
+				compareBasicTypesPointerMap(t, e.MapPointers, a.MapPointers)
+
+				// Compare slice maps
+				assert.Equal(t, len(e.SliceMap), len(a.SliceMap), "SliceMap lengths should match")
+				for k, expectedSlice := range e.SliceMap {
+					actualSlice, ok := a.SliceMap[k]
+					if !ok {
+						t.Errorf("key %q missing from SliceMap", k)
+						continue
+					}
+					assert.Equal(t, expectedSlice, actualSlice, "slices for key %q should match", k)
+				}
+			},
+		},
+		{
+			name:    "json tags",
+			jsonStr: `[{"renamed": "new name", "ignored": "should not set", "omitted": ""}]`,
+			target:  &TaggedStruct{},
+			expected: &TaggedStruct{
+				Struct: struct {
+					RenamedField string `json:"renamed"`
+					IgnoredField string `json:"-"`
+					EmptyOmitted string `json:"omitted,omitempty"`
+				}{
+					RenamedField: "new name",
+					IgnoredField: "", // Should remain empty
+					EmptyOmitted: "", // Should be included even though empty
+				},
+			},
+			compare: func(t *testing.T, expected, actual interface{}) {
+				e := expected.(*TaggedStruct)
+				a := actual.(*TaggedStruct)
+				assert.Equal(t, e.Struct.RenamedField, a.Struct.RenamedField, "renamed field should match")
+				assert.Equal(t, e.Struct.IgnoredField, a.Struct.IgnoredField, "ignored field should match")
+				assert.Equal(t, e.Struct.EmptyOmitted, a.Struct.EmptyOmitted, "empty field should match")
+			},
+		},
+		{
+			name:    "null values",
+			jsonStr: `[null, null, null, null, null]`,
+			target:  &NullableTypes{},
+			expected: &NullableTypes{
+				NullString:    nil,
+				NullStruct:    nil,
+				NullSlice:     nil,
+				NullMap:       nil,
+				NullInterface: nil,
+			},
+		},
+		{
+			name:    "mixed null and non-null",
+			jsonStr: `["value", {"String": "test"}, ["item"], {"key": "value"}, 42]`,
+			target:  &NullableTypes{},
+			expected: &NullableTypes{
+				NullString:    &value,
+				NullStruct:    &BasicTypes{String: "test"},
+				NullSlice:     []string{"item"},
+				NullMap:       map[string]string{"key": "value"},
+				NullInterface: float64(42),
+			},
+			compare: func(t *testing.T, expected, actual interface{}) {
+				e := expected.(*NullableTypes)
+				a := actual.(*NullableTypes)
+				// Compare string pointers by value
+				if e.NullString == nil {
+					assert.Nil(t, a.NullString)
+				} else {
+					assert.NotNil(t, a.NullString)
+					assert.Equal(t, *e.NullString, *a.NullString)
+				}
+				// Compare struct pointers by value
+				if e.NullStruct == nil {
+					assert.Nil(t, a.NullStruct)
+				} else {
+					assert.NotNil(t, a.NullStruct)
+					assert.Equal(t, *e.NullStruct, *a.NullStruct)
+				}
+				// Compare remaining fields normally
+				assert.Equal(t, e.NullSlice, a.NullSlice)
+				assert.Equal(t, e.NullMap, a.NullMap)
+				assert.Equal(t, e.NullInterface, a.NullInterface)
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -265,7 +471,11 @@ func TestDecodeSidekiqArgs(t *testing.T) {
 				assert.Error(t, err)
 			} else {
 				assert.NoError(t, err)
-				assert.Equal(t, tt.expected, tt.target)
+				if tt.compare != nil {
+					tt.compare(t, tt.expected, tt.target)
+				} else {
+					assert.Equal(t, tt.expected, tt.target)
+				}
 			}
 		})
 	}
